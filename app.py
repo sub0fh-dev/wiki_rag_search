@@ -11,10 +11,10 @@ st.set_page_config(
     layout="centered"
 )
 
-# OpenAI 클라이언트 초기화
+# OpenAI 클라이언트
 client = OpenAI(api_key=st.secrets["api_key"])
 
-# Elasticsearch 클라우드 연결 정보
+# Elasticsearch 클라우드 연결
 ELASTIC_CLOUD_ID = st.secrets["elastic_cloud_key"]
 ELASTIC_API_KEY = st.secrets["elastic_api_key"]
 
@@ -44,14 +44,5 @@ with st.form("query_form"):
 # ===============================
 if submitted and question:
     with st.spinner("🤖 Kevin AI가 검색 중입니다... 잠시만 기다려주세요!"):
-
         # 1️⃣ 질문 임베딩 생성
-        embedding = client.embeddings.create(
-            model="text-embedding-3-large",
-            input=[question]
-        ).data[0].embedding
-
-        # 2️⃣ Elasticsearch 벡터 검색
-        # 🔥 최신 Elasticsearch 대응 (BadRequestError 방지)
-        response = es.search(
-            index="wikipedia_vector_index",
+        embedding = client.e
