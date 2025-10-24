@@ -44,5 +44,25 @@ with st.form("query_form"):
 # ===============================
 if submitted and question:
     with st.spinner("🤖 Kevin AI가 검색 중입니다... 잠시만 기다려주세요!"):
+
         # 1️⃣ 질문 임베딩 생성
-        embedding = client.e
+        embedding = client.embeddings.create(
+            model="text-embedding-3-large",
+            input=[question]
+        ).data[0].embedding
+
+        # 2️⃣ Elasticsearch 벡터 검색
+        response = es.search(
+            index="wikipedia_vector_index",
+            body={
+                "knn": {
+                    "field": "content_vector",
+                    "query_vector": embedding,
+                    "k": 5,
+                    "num_candidates": 50
+                },
+                "_source": ["title", "url", "text"]
+            }
+        )
+
+        hits = response["hits"]["hits"]
