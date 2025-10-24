@@ -4,12 +4,12 @@ import streamlit as st
 from openai import OpenAI
 from elasticsearch import Elasticsearch
 
+# ===============================
+# OpenAI & Elasticsearch 설정
+# ===============================
 client = OpenAI(api_key=st.secrets["api_key"])
 
-# https://www.elastic.co/search-labs/tutorials/install-elasticsearch/elastic-cloud#finding-your-cloud-id
 ELASTIC_CLOUD_ID = st.secrets["elastic_cloud_key"]
-
-# https://www.elastic.co/search-labs/tutorials/install-elasticsearch/elastic-cloud#creating-an-api-key
 ELASTIC_API_KEY = st.secrets["elastic_api_key"]
 
 es = Elasticsearch(
@@ -17,64 +17,82 @@ es = Elasticsearch(
     api_key=ELASTIC_API_KEY
 )
 
-# Test connection to Elasticsearch
-print(es.info())
+# 연결 테스트
+try:
+    es_info = es.info()
+    print("Elasticsearch 연결 성공!")
+except Exception as e:
+    st.error("Elasticsearch 연결 실패: " + str(e))
 
-st.subheader("영문 위키피디아 이용한")
-st.title("한글로 답변하는 AI")
-st.subheader("부제 : Semantic search and Retrieval augmented generation using Elasticsearch and OpenAI")
+# ===============================
+# Streamlit UI
+# ===============================
+st.set_page_config(page_title="Kevin AI Wiki", layout="wide")
 
-st.caption('''
-영문 Wiki에서 답변 가능한 질문에 대해서 답변을 잘합니다. 졸은 질문 예 : 
+st.markdown("<h1 style='text-align:center; color: #4B0082;'>한글로 답변하는 AI</h1>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align:center; color: #6A5ACD;'>영문 위키 기반 RAG (Retrieval Augmented Generation)</h3>", unsafe_allow_html=True)
+st.markdown("---")
+
+st.markdown("""
+영문 Wikipedia 데이터를 활용하여 질문에 한국어로 답변합니다.  
+예시 질문: 
 - 대서양은 몇 번째로 큰 바다인가?
 - 대한민국의 수도는?
 - 이순신의 출생년도는?
 - 도요타에서 가장 많이 팔리는 차는?
+""")
 
-데이터 출처
-- https://cdn.openai.com/API/examples/data/vector_database_wikipedia_articles_embedded.zip
-- 데이터 설명 : https://weaviate.io/developers/weaviate/tutorials/wikipedia
-- 데이터 건수 : 25,000건 (데이터의 양을 늘리면, 다양한 질문에 대한 답변 가능)
-''')
+st.markdown("""
+데이터 출처:  
+[Wiki Embeddings 샘플 데이터](https://cdn.openai.com/API/examples/data/vector_database_wikipedia_articles_embedded.zip)  
+데이터 설명: [Weaviate Tutorial](https://weaviate.io/developers/weaviate/tutorials/wikipedia)  
+데이터 건수: 25,000건
+""")
 
-with st.form("form"):
-    question = st.text_input("Prompt")
-    submit = st.form_submit_button("Submit")
+st.markdown("---")
+
+# ===============================
+# 질문 입력 폼
+# ===============================
+with st.form("question_form"):
+    question = st.text_input("질문을 입력하세요")
+    submit = st.form_submit_button("질문하기")
 
 if submit and question:
-    with st.spinner("Waiting for Kevin AI..."):
-        print("질문 : " + question)
-        question = question.replace("\n", " ")
-
+    with st.spinner("Kevin AI가 답변 준비 중..."):
         # 1️⃣ 한국어 → 영어 번역
-        question = client.chat.completions.create(
+        translated = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {
                     "role": "user",
-                    "content": "If a question comes in Korean, Translate the following Korean text to English: " + question
+                    "content": "Translate the following Korean question into English: " + question
                 }
             ]
         )
-        question = question.choices[0].message.content
-        print("번역 : " + question)
+        english_question = translated.choices[0].message.content
+        print("번역:", english_question)
 
         # 2️⃣ 질문 임베딩 생성
         question_embedding = client.embeddings.create(
-            input=[question],
+            input=[english_question],
             model="text-embedding-ada-002"
         ).data[0].embedding
 
         # 3️⃣ Elasticsearch 검색
-        response = es.search(
-            index="wikipedia_vector_index",
-            knn={
-                "field": "content_vector",
-                "query_vector": question_embedding,
-                "k": 10,
-                "num_candidates": 100
-            }
-        )
+        try:
+            response = es.search(
+                index="wikipedia_vector_index",
+                knn={
+                    "field": "content_vector",
+                    "query_vector": question_embedding,
+                    "k": 10,
+                    "num_candidates": 100
+                }
+            )
+        except Exception as e:
+            st.error("Elasticsearch 검색 실패: " + str(e))
+            st.stop()
 
         # 4️⃣ 최상위 문서 텍스트 추출
         top_hit_summary = response['hits']['hits'][0]['_source']['text']
@@ -85,32 +103,23 @@ if submit and question:
             messages=[
                 {
                     "role": "system",
-                    "content": "You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know."
+                    "content": "You are an assistant for question-answering tasks. Use the retrieved context to answer concisely in Korean. If unknown, say '제가 가진 정보로는 알 수 없습니다.'"
                 },
                 {
                     "role": "user",
-                    "content": "Use three sentences maximum and keep the answer concise and Answer in korean: Question: "
-                    + question +
-                    " Context: " + top_hit_summary
+                    "content": f"Question: {english_question} Context: {top_hit_summary} Answer in Korean in maximum 3 sentences."
                 }
             ]
         )
 
-        # 6️⃣ 결과 출력
-        choices = summary.choices
-        st.divider()
+        # 6️⃣ 답변 출력
+        st.markdown("### 💡 Kevin AI 답변")
+        st.info(summary.choices[0].message.content)
 
-        for choice in choices:
-            print(choice.message.content)
-            st.markdown(choice.message.content)
-
-        st.divider()
-        st.subheader("검색해본 위키 문서 List")
-
+        # 7️⃣ 검색된 문서 리스트
+        st.markdown("### 🔍 관련 Wiki 문서")
         for hit in response['hits']['hits']:
-            id = hit['_id']
-            score = hit['_score']
             title = hit['_source']['title']
             url = hit['_source']['url']
-            pretty_output = f"\nID: {id}\nTitle: {title}\nUrl: {url}\nScore: {score}"
-            st.markdown(pretty_output)
+            score = hit['_score']
+            st.markdown(f"- [{title}]({url}) (Score: {score:.2f})")
