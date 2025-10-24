@@ -13,13 +13,12 @@ ELASTIC_CLOUD_ID = st.secrets["elastic_cloud_key"]
 ELASTIC_API_KEY = st.secrets["elastic_api_key"]
 
 es = Elasticsearch(
-  cloud_id = ELASTIC_CLOUD_ID,
-  api_key=ELASTIC_API_KEY
+    cloud_id=ELASTIC_CLOUD_ID,
+    api_key=ELASTIC_API_KEY
 )
 
 # Test connection to Elasticsearch
 print(es.info())
-
 
 st.subheader("영문 위키피디아 이용한")
 st.title("한글로 답변하는 AI")
@@ -36,7 +35,6 @@ st.caption('''
 - https://cdn.openai.com/API/examples/data/vector_database_wikipedia_articles_embedded.zip
 - 데이터 설명 : https://weaviate.io/developers/weaviate/tutorials/wikipedia
 - 데이터 건수 : 25,000건 (데이터의 양을 늘리면, 다양한 질문에 대한 답변 가능)
-
 ''')
 
 with st.form("form"):
@@ -44,11 +42,75 @@ with st.form("form"):
     submit = st.form_submit_button("Submit")
 
 if submit and question:
-  with st.spinner("Waiting for Kevin AI..."):
-      print("질문 : " + question)
-      question = question.replace("\n", " ")
-    
-      question = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-              {
+    with st.spinner("Waiting for Kevin AI..."):
+        print("질문 : " + question)
+        question = question.replace("\n", " ")
+
+        # 1️⃣ 한국어 → 영어 번역
+        question = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "If a question comes in Korean, Translate the following Korean text to English: " + question
+                }
+            ]
+        )
+        question = question.choices[0].message.content
+        print("번역 : " + question)
+
+        # 2️⃣ 질문 임베딩 생성
+        question_embedding = client.embeddings.create(
+            input=[question],
+            model="text-embedding-ada-002"
+        ).data[0].embedding
+
+        # 3️⃣ Elasticsearch 검색
+        response = es.search(
+            index="wikipedia_vector_index",
+            knn={
+                "field": "content_vector",
+                "query_vector": question_embedding,
+                "k": 10,
+                "num_candidates": 100
+            }
+        )
+
+        # 4️⃣ 최상위 문서 텍스트 추출
+        top_hit_summary = response['hits']['hits'][0]['_source']['text']
+
+        # 5️⃣ GPT로 한국어 요약/답변 생성
+        summary = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know."
+                },
+                {
+                    "role": "user",
+                    "content": "Use three sentences maximum and keep the answer concise and Answer in korean: Question: "
+                    + question +
+                    " Context: " + top_hit_summary
+                }
+            ]
+        )
+
+        # 6️⃣ 결과 출력
+        choices = summary.choices
+        st.divider()
+
+        for choice in choices:
+            print(choice.message.content)
+            st.markdown(choice.message.content)
+
+        st.divider()
+        st.subheader("검색해본 위키 문서 List")
+
+        for hit in response['hits']['hits']:
+            id = hit['_id']
+            score = hit['_score']
+            title = hit['_source']['title']
+            url = hit['_source']['url']
+            pretty_output = f"\nID: {id}\nTitle: {title}\nUrl: {url}\nScore: {score}"
+            st.markdown(pretty_output)
